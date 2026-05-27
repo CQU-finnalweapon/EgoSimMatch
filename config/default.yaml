@@ -1,0 +1,15 @@
+# EgoSimMatch 默认配置
+
+data:
+  ego_root: "./data/ego"
+  robot_root: "./data/robot"
+
+embedding:
+  image_model: "clip-vit-base-patch32"
+  text_model: "clip-vit-base-patch32"
+  device: "cuda"
+
+matching:
+  metric: "cosine"          # cosine | euclidean
+  top_k: 10
+  space: "joint"            # vision | language | joint
