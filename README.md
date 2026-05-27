@@ -1,6 +1,6 @@
 # EgoSimMatch
 
-**Egocentric Similarity Matching** — 具身智能领域机器人数据与人手 Egocentric 数据的相似度计算与匹配。
+**Egocentric Similarity Matching** — 机器人遥操数据与人类第一视角 Egocentric 数据的相似度计算与匹配。
 
 ## 📌 项目简介
 
