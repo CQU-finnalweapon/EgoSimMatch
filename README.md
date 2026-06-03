@@ -6,7 +6,13 @@
 
 本项目旨在解决具身智能（Embodied AI）领域中，**机器人数据**与**人手的 Egocentric（第一人称视角）数据**之间的跨模态相似度计算与匹配问题。
 
-通过对图像和文本两种模态进行 Embedding 编码，将机器人数据与人类示教数据映射到共享的语义空间（如视觉-语言联合空间），从而实现高效的相似度检索与匹配。
+通过对图像和文本两种模态进行 Embedding 编码（基于 Qwen3-VL-Embedding-8B），将机器人数据与人类示教数据映射到共享的语义空间，从而实现高效的相似度检索与匹配。
+
+## 🎯 核心功能
+
+- **EgoDex 内部匹配**：在 EgoDex 数据集内找相似任务片段
+- **EgouDas × EgoTel 交叉匹配**：计算人类 ego 视角与远程操作视角的跨视角相似度（18×18 全匹配）
+- **视觉-语言联合 Embedding**：每个 segment 用 9 帧图像（4秒均匀采样）+ task 文本描述编码
 
 ## 🧠 核心思路
 
@@ -46,6 +52,23 @@ EgoSimMatch/
 └── README.md           # 本文件
 ```
 
+## 🎬 可视化结果
+
+### EgouDas × EgoTel 交叉匹配（18×18 全匹配）
+
+**最高相似度配对 (sim=0.885)** — 同任务：
+
+![top_01](docs/images/top_01_sim0.885.png)
+
+**最低相似度配对 (sim=0.325)** — 不同任务：
+
+![bottom_01](docs/images/bottom_01_sim0.325.png)
+
+- 左侧：EgouDas（人类第一人称视角）
+- 右侧：EgoTel（远程操作视角）
+- 每个 segment：9 帧图像（4秒均匀采样）+ task 文本
+- 相似度通过 Qwen3-VL-Embedding-8B 计算（视觉+语言联合编码）
+
 ## 🚀 快速开始
 
 ```bash
@@ -55,21 +78,17 @@ cd EgoSimMatch
 
 # 安装依赖
 pip install -r requirements.txt
+
+# 运行 EgouDas × EgoTel 交叉匹配
+python scripts/udas_tel_cross_match.py --device cuda:0 --batch_size 8
 ```
-
-## 🧩 主要特性
-
-- **多模态 Embedding**：分别对图像和文本进行特征提取
-- **跨空间相似度计算**：支持在视觉空间、语言空间或联合视觉-语言空间中计算相似度
-- **高效匹配**：支持大规模数据下的快速检索与匹配
-- **可扩展**：模块化设计，便于接入不同的特征提取器与度量方式
 
 ## 📚 技术栈
 
-- Python
-- PyTorch / TensorFlow
-- CLIP / ViT 等视觉-语言模型
-- FAISS / Milvus 等向量检索工具（规划中）
+- Python 3.8+
+- PyTorch
+- Qwen3-VL-Embedding-8B（视觉-语言联合 Embedding）
+- OpenCV、PIL（视频帧采样与可视化）
 
 ## 📄 许可
 
