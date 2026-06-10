@@ -24,10 +24,17 @@ conda-env/
 data/raw/
 data/processed/
 
-# Models
+# Models (weights / large downloads — keep code like models/act, models/__init__.py)
 models/checkpoints/
+models/Qwen3-Embedding-8B/
+models/Qwen3-VL-Embedding-8B/
+models/siglip2/
 *.pth
 *.pt
+*.safetensors
+
+# Outputs (generated artifacts / embeddings)
+outputs/
 
 # Logs
 logs/

@@ -1,15 +1,15 @@
-"""EgouDas DataLoader — lerobot parquet + MP4 格式，按 task_index 切分 segment。
+"""EgouDas DataLoader — lerobot parquet + MP4 格式（新路径 0513_anno_v2）。
 
-数据路径（使用 retask 版本，parquet 可读）：
-  .../ego_data_retask/{date}/{session}/
+数据路径：
+  .../ego_uDas/data_collection/moz_lerobot/0513_anno_v2/task_{id}/{dataset_dir}/
     meta/tasks.jsonl          task_index -> task 文本
     meta/episodes.jsonl       episode_index -> task_index（多个）
-    data/chunk-000/episode_XXXXXX.parquet   含 task_index 字段（逐帧）
-    videos/chunk-000/{cam}/episode_XXXXXX.mp4
+    data/chunk-XXX/episode_XXXXXX.parquet   含 task_index 字段（逐帧）
+    videos/chunk-XXX/{cam}/episode_XXXXXX.mp4
 
 切分逻辑：
   每个 episode 按 task_index 字段切分成多个 segment，
-  每个 segment 对应一个独立的动作片段（通常 120 帧）。
+  每个 segment 对应一个独立的动作片段。
   一个 segment = 一个训练样本。
 """
 
@@ -19,14 +19,12 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
 import cv2
-import numpy as np
 import pyarrow.parquet as pq
 from PIL import Image
 
-EGOUDAS_RETASK_ROOT = (
-    "/mnt/vepfs01/output/yuhang/spirit_VLA/egocentric/code/"
-    "mozbrain_main_0402_ego_grouploss/outputs/converted_data/"
-    "ego_uDas/moz_lerobot/ego_data_retask"
+EGOUDAS_ROOT = (
+    "/mnt/vepfs01/output/yuhang/spirit_VLA/egocentric/"
+    "data/egocentric_data/ego_uDas/data_collection/moz_lerobot/0513_anno_v2"
 )
 
 CAMERAS = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
@@ -35,7 +33,8 @@ CAMERAS = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
 @dataclass
 class EgouDasSegment:
     """一个 task segment（episode 中连续属于同一 task_index 的帧）。"""
-    session: str
+    task_name: str           # e.g. "task_8220"
+    dataset_dir: str
     episode_index: int
     task_index: int
     task: str
@@ -46,66 +45,59 @@ class EgouDasSegment:
 
 
 @dataclass
-class EgouDasSession:
-    session_dir: Path
-    session_name: str
+class EgouDasDataset:
+    dataset_dir: Path
+    task_name: str
+    dataset_dir_name: str
     tasks: Dict[int, str]       # task_index -> task text
-    video_dirs: Dict[str, Path] # cam_name -> videos/chunk-000/{cam}/
-    parquet_dir: Path           # data/chunk-000/
+    video_dirs: Dict[str, Path] # cam_name -> videos/chunk-XXX/{cam}/
+    parquet_dirs: List[Path]    # data/chunk-XXX/
 
 
 class EgouDasDataLoader:
-    """从 EgouDas retask 数据中加载 task segment 样本。
-
-    每个样本是 episode 中一个连续的 task segment，取中间帧作为代表帧。
+    """从 EgouDas 0513_anno_v2 数据中加载 task segment 样本。
 
     Args:
-        split: "train" 或 "eval"（通过 split_gripper 目录的 split_info.json 过滤）
+        split: 保留参数（新数据暂无 train/eval split，默认全量加载）
         cameras: 要加载的摄像头列表
-        max_sessions: 最多加载多少个 session（用于快速测试）
+        max_datasets: 最多加载多少个 dataset 目录（用于快速测试）
         min_segment_frames: 最短 segment 帧数（过滤过短的片段）
     """
 
     def __init__(
         self,
-        root: str = EGOUDAS_RETASK_ROOT,
+        root: str = EGOUDAS_ROOT,
         split: str = "eval",
         cameras: Optional[List[str]] = None,
-        max_sessions: Optional[int] = None,
+        max_datasets: Optional[int] = None,
         min_segment_frames: int = 10,
     ):
         self.root = Path(root)
         self.split = split
         self.cameras = cameras or CAMERAS
-        self.max_sessions = max_sessions
+        self.max_datasets = max_datasets
         self.min_segment_frames = min_segment_frames
-        self._sessions = self._collect_sessions()
+        self._datasets = self._collect_datasets()
 
-    def _collect_sessions(self) -> List[EgouDasSession]:
-        # 用 split_gripper 的 split_info.json 来确定哪些 session 属于 train/eval
-        split_gripper_root = self.root.parent / "ego_data_retask_split_gripper" / self.split
-        sessions = []
-
-        for date_dir in sorted(self.root.iterdir()):
-            if not date_dir.is_dir():
+    def _collect_datasets(self) -> List[EgouDasDataset]:
+        """遍历 task_XXXX/dataset_*/ 收集数据集。"""
+        datasets = []
+        for task_dir in sorted(self.root.iterdir()):
+            if not task_dir.is_dir() or not task_dir.name.startswith("task_"):
                 continue
-            for session_dir in sorted(date_dir.iterdir()):
-                if not session_dir.is_dir():
+            task_name = task_dir.name
+            for dataset_dir in sorted(task_dir.iterdir()):
+                if not dataset_dir.is_dir() or dataset_dir.name.endswith("_split"):
                     continue
-                # 检查对应的 split_gripper 目录是否存在（确认该 session 属于此 split）
-                split_check = split_gripper_root / date_dir.name / session_dir.name
-                if not split_check.exists():
-                    continue
+                ds = self._load_dataset_meta(task_name, dataset_dir)
+                if ds is not None:
+                    datasets.append(ds)
+                    if self.max_datasets and len(datasets) >= self.max_datasets:
+                        return datasets
+        return datasets
 
-                session = self._load_session_meta(session_dir)
-                if session is not None:
-                    sessions.append(session)
-                    if self.max_sessions and len(sessions) >= self.max_sessions:
-                        return sessions
-        return sessions
-
-    def _load_session_meta(self, session_dir: Path) -> Optional[EgouDasSession]:
-        tasks_file = session_dir / "meta" / "tasks.jsonl"
+    def _load_dataset_meta(self, task_name: str, dataset_dir: Path) -> Optional[EgouDasDataset]:
+        tasks_file = dataset_dir / "meta" / "tasks.jsonl"
         if not tasks_file.exists():
             return None
 
@@ -115,37 +107,49 @@ class EgouDasDataLoader:
                 d = json.loads(line)
                 tasks[d["task_index"]] = d["task"]
 
+        # 收集所有 chunk 的 parquet 目录
+        data_dir = dataset_dir / "data"
+        parquet_dirs = sorted(
+            [d for d in data_dir.iterdir() if d.is_dir() and d.name.startswith("chunk-")]
+        ) if data_dir.exists() else []
+
+        # 收集所有 chunk 的视频目录
+        video_dir = dataset_dir / "videos"
         video_dirs = {}
-        for cam in self.cameras:
-            cam_dir = session_dir / "videos" / "chunk-000" / cam
-            if cam_dir.exists():
-                video_dirs[cam] = cam_dir
+        if video_dir.exists():
+            for chunk_dir in sorted(video_dir.iterdir()):
+                if not chunk_dir.is_dir() or not chunk_dir.name.startswith("chunk-"):
+                    continue
+                for cam in self.cameras:
+                    cam_dir = chunk_dir / cam
+                    if cam_dir.exists() and cam not in video_dirs:
+                        video_dirs[cam] = cam_dir
 
-        parquet_dir = session_dir / "data" / "chunk-000"
-
-        return EgouDasSession(
-            session_dir=session_dir,
-            session_name=session_dir.name,
+        return EgouDasDataset(
+            dataset_dir=dataset_dir,
+            task_name=task_name,
+            dataset_dir_name=dataset_dir.name,
             tasks=tasks,
             video_dirs=video_dirs,
-            parquet_dir=parquet_dir,
+            parquet_dirs=parquet_dirs,
         )
 
     def __len__(self) -> int:
-        return len(self._sessions)
+        return len(self._datasets)
 
     def iter_segments(self) -> Iterator[EgouDasSegment]:
         """逐 segment 迭代，每个 segment 是一个独立的 task 片段。"""
-        for session in self._sessions:
-            yield from self._iter_session_segments(session)
+        for ds in self._datasets:
+            yield from self._iter_dataset_segments(ds)
 
-    def _iter_session_segments(self, session: EgouDasSession) -> Iterator[EgouDasSegment]:
-        for parquet_path in sorted(session.parquet_dir.glob("episode_*.parquet")):
-            ep_idx = int(parquet_path.stem.split("_")[1])
-            yield from self._extract_segments(session, ep_idx, parquet_path)
+    def _iter_dataset_segments(self, ds: EgouDasDataset) -> Iterator[EgouDasSegment]:
+        for parquet_dir in ds.parquet_dirs:
+            for parquet_path in sorted(parquet_dir.glob("episode_*.parquet")):
+                ep_idx = int(parquet_path.stem.split("_")[1])
+                yield from self._extract_segments(ds, ep_idx, parquet_path)
 
     def _extract_segments(
-        self, session: EgouDasSession, episode_index: int, parquet_path: Path
+        self, ds: EgouDasDataset, episode_index: int, parquet_path: Path
     ) -> Iterator[EgouDasSegment]:
         try:
             table = pq.read_table(parquet_path, columns=["task_index", "frame_index"])
@@ -154,13 +158,10 @@ class EgouDasDataLoader:
 
         task_indices = table["task_index"].to_pylist()
         frame_indices = table["frame_index"].to_pylist()
-
-        # 找连续相同 task_index 的 segment
         segments = self._find_segments(task_indices, frame_indices)
 
-        # 打开视频
         caps: Dict[str, cv2.VideoCapture] = {}
-        for cam, cam_dir in session.video_dirs.items():
+        for cam, cam_dir in ds.video_dirs.items():
             video_path = cam_dir / f"episode_{episode_index:06d}.mp4"
             if video_path.exists():
                 cap = cv2.VideoCapture(str(video_path))
@@ -170,18 +171,18 @@ class EgouDasDataLoader:
         for task_idx, frame_start, frame_end in segments:
             if frame_end - frame_start + 1 < self.min_segment_frames:
                 continue
-            task = session.tasks.get(task_idx, "")
+            task = ds.tasks.get(task_idx, "")
             if not task:
                 continue
 
-            # 取中间帧
             mid_frame = (frame_start + frame_end) // 2
             images = self._read_frame(caps, mid_frame)
             if not images:
                 continue
 
             yield EgouDasSegment(
-                session=session.session_name,
+                task_name=ds.task_name,
+                dataset_dir=ds.dataset_dir_name,
                 episode_index=episode_index,
                 task_index=task_idx,
                 task=task,
@@ -226,24 +227,25 @@ class EgouDasDataLoader:
                 images[cam] = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         return images
 
-    def get_task_to_segments(self) -> Dict[str, List[Tuple[str, int, int, int]]]:
-        """返回 task -> [(session, episode_index, frame_start, frame_end)] 索引。"""
-        index: Dict[str, List[Tuple[str, int, int, int]]] = {}
-        for session in self._sessions:
-            for parquet_path in sorted(session.parquet_dir.glob("episode_*.parquet")):
-                ep_idx = int(parquet_path.stem.split("_")[1])
-                try:
-                    table = pq.read_table(parquet_path, columns=["task_index", "frame_index"])
-                except Exception:
-                    continue
-                task_indices = table["task_index"].to_pylist()
-                frame_indices = table["frame_index"].to_pylist()
-                for task_idx, frame_start, frame_end in self._find_segments(task_indices, frame_indices):
-                    if frame_end - frame_start + 1 < self.min_segment_frames:
+    def get_task_to_segments(self) -> Dict[str, List[Tuple[str, str, int, int, int]]]:
+        """返回 task -> [(task_name, dataset_dir, episode_index, frame_start, frame_end)] 索引。"""
+        index: Dict[str, List[Tuple[str, str, int, int, int]]] = {}
+        for ds in self._datasets:
+            for parquet_dir in ds.parquet_dirs:
+                for parquet_path in sorted(parquet_dir.glob("episode_*.parquet")):
+                    ep_idx = int(parquet_path.stem.split("_")[1])
+                    try:
+                        table = pq.read_table(parquet_path, columns=["task_index", "frame_index"])
+                    except Exception:
                         continue
-                    task = session.tasks.get(task_idx, "")
-                    if task:
-                        index.setdefault(task, []).append(
-                            (session.session_name, ep_idx, frame_start, frame_end)
-                        )
+                    task_indices = table["task_index"].to_pylist()
+                    frame_indices = table["frame_index"].to_pylist()
+                    for task_idx, frame_start, frame_end in self._find_segments(task_indices, frame_indices):
+                        if frame_end - frame_start + 1 < self.min_segment_frames:
+                            continue
+                        task = ds.tasks.get(task_idx, "")
+                        if task:
+                            index.setdefault(task, []).append(
+                                (ds.task_name, ds.dataset_dir_name, ep_idx, frame_start, frame_end)
+                            )
         return index
